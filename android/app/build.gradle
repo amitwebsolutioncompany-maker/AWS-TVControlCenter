@@ -1,0 +1,95 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+
+react {
+    autolinkLibrariesWithApp()
+}
+
+def enableProguardInReleaseBuilds = false
+def jscFlavor = 'org.webkit:android-jsc:+'
+
+android {
+    ndkVersion rootProject.ext.ndkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
+
+    namespace "com.aws.tvcontrolcenter"
+    defaultConfig {
+        applicationId "com.aws.tvcontrolcenter"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 6
+        versionName "1.0.5"
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    packaging {
+        resources {
+            excludes += ["META-INF/versions/9/OSGI-INF/MANIFEST.MF"]
+        }
+    }
+
+    // Enable new architecture for compatibility with RN 0.76+
+    project.ext.react = [
+        enableHermes: false,
+        enableNewArchitecture: false,
+    ]
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+        release {
+            storeFile file('release.keystore')
+            storePassword 'aws@3401'
+            keyAlias 'tvcontrolcenter'
+            keyPassword 'aws@3401'
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled enableProguardInReleaseBuilds
+            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+        }
+    }
+}
+
+// Keep the distributable release artifact easy to identify when it is copied
+// out of the build folder.
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.outputs.forEach { output ->
+            output.outputFileName.set("AWS-TVControlCenter.apk")
+        }
+    }
+}
+
+dependencies {
+    implementation("com.facebook.react:react-android")
+    // Real ADB client: handles the protocol and RSA authorization rather than
+    // treating an open TCP port as an authenticated ADB connection.
+    implementation("com.flyfishxu:kadb:1.2.1")
+
+    if (hermesEnabled.toBoolean()) {
+        implementation("com.facebook.react:hermes-android")
+    } else {
+        implementation jscFlavor
+    }
+}
+
+// Kadb 1.2.1 uses Kotlin 2.1 metadata, while React Native 0.76's Gradle
+// plugin is pinned to Kotlin 1.9. The library API used here is binary
+// compatible; this only lets the compiler read its newer metadata.
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    kotlinOptions.freeCompilerArgs += ["-Xskip-metadata-version-check"]
+}

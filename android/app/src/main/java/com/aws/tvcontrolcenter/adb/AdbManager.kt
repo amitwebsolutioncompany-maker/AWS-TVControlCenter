@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
 import android.view.Surface
 
@@ -16,14 +17,16 @@ class AdbManager(private val context: Context) {
     
     private val transports = ConcurrentHashMap<String, AdbTransport>()
     private val savedWifiDevices = context.getSharedPreferences("saved_wifi_adb_devices", Context.MODE_PRIVATE)
+    private val connectMutex = kotlinx.coroutines.sync.Mutex()
     
     suspend fun connectWifiDevice(ip: String, port: Int = 5555): Result<AdbDevice> = withContext(Dispatchers.IO) {
-        try {
-            val deviceId = "wifi_${ip}_$port"
-            
-            if (devices.containsKey(deviceId) && transports[deviceId]?.isConnected() == true) {
-                return@withContext Result.success(devices[deviceId]!!)
-            }
+        connectMutex.withLock {
+            try {
+                val deviceId = "wifi_${ip}_$port"
+                
+                if (devices.containsKey(deviceId) && transports[deviceId]?.isConnected() == true) {
+                    return@withLock Result.success(devices[deviceId]!!)
+                }
             // A stale cached entry must never prevent an explicit reconnect.
             transports.remove(deviceId)?.disconnect()
             devices.remove(deviceId)
@@ -77,6 +80,7 @@ class AdbManager(private val context: Context) {
         } catch (e: Exception) {
             Result.failure(e)
         }
+        } // end withLock
     }
     
     suspend fun connectUsbDevice(usbDevice: android.hardware.usb.UsbDevice): Result<AdbDevice> = withContext(Dispatchers.IO) {

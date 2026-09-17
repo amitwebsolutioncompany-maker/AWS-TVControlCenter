@@ -22,6 +22,7 @@ import LogsScreen from './screens/LogsScreen';
 import PresetsScreen from './screens/PresetsScreen';
 import AboutScreen from './screens/AboutScreen';
 import MenuScreen from './screens/MenuScreen';
+import ScreenMirrorScreen from './screens/ScreenMirrorScreen';
 import { GlobalHeader } from './components/GlobalHeader';
 
 type RootStackParamList = {
@@ -56,6 +57,7 @@ function MainTabs() {
       <Tab.Screen name="Deploy" component={DeployScreen} />
       <Tab.Screen name="Files" component={FilesScreen} />
       <Tab.Screen name="Remote" component={RemoteScreen} />
+      <Tab.Screen name="Mirror" component={ScreenMirrorScreen} />
       <Tab.Screen name="Menu" component={MenuScreen} />
       <Tab.Screen name="Settings" component={SettingsScreen} />
     </Tab.Navigator>
@@ -70,7 +72,17 @@ export default function App() {
     // authorization dialog the first time; Android does not permit bypassing it.
     const discoverAndConnect = async () => {
       try {
-        const endpoints = await TvControlService.scanWifiDevices();
+        const [saved, scanned] = await Promise.all([
+          TvControlService.getSavedWifiDevices().catch(() => []),
+          TvControlService.scanWifiDevices().catch(() => []),
+        ]);
+        const seen = new Set<string>();
+        const endpoints = [...saved, ...scanned].filter((endpoint: { ipAddress: string; port: number }) => {
+          const key = `${endpoint.ipAddress}:${endpoint.port}`;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
         await Promise.all(endpoints.map(async (endpoint: { ipAddress: string; port: number }) => {
           try {
             const device = await TvControlService.connectWifiDevice(endpoint.ipAddress, endpoint.port);

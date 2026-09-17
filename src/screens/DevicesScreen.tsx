@@ -6,16 +6,28 @@ import { Colors } from '../constants/colors';
 import { TvControlService } from '../services/TvControlService';
 
 const DevicesScreen: React.FC = () => {
-  const { devices, addDevice, setSelectedDevice, selectedDeviceIds, toggleDeviceSelection, updateDevice, removeDevice } = useDeviceStore();
+  const { devices, addDevice, setSelectedDevice, selectedDeviceIds, toggleDeviceSelection, updateDevice, removeDevice, setDevices } = useDeviceStore();
   const navigation = useNavigation<any>();
   const [ipAddress, setIpAddress] = React.useState('');
   const [port, setPort] = React.useState('5555');
   const [connecting, setConnecting] = React.useState(false);
   const [scanning, setScanning] = React.useState(false);
+  
+  // Google TV Pairing State
+  const [showPairing, setShowPairing] = React.useState(false);
+  const [pairIp, setPairIp] = React.useState('');
+  const [pairPort, setPairPort] = React.useState('');
+  const [pairCode, setPairCode] = React.useState('');
+  const [pairing, setPairing] = React.useState(false);
 
   const connect = React.useCallback(async (ip = ipAddress, requestedPort = Number(port)) => {
-    const host = ip.trim();
-    const adbPort = Number.isInteger(requestedPort) && requestedPort > 0 && requestedPort < 65536 ? requestedPort : 5555;
+    // Allow either separate fields or a pasted IP:port endpoint. The port
+    // input itself intentionally remains numeric for Android TV remotes.
+    const typed = ip.trim();
+    const separator = typed.lastIndexOf(':');
+    const host = separator > 0 ? typed.substring(0, separator) : typed;
+    const inlinePort = separator > 0 ? Number(typed.substring(separator + 1)) : requestedPort;
+    const adbPort = Number.isInteger(inlinePort) && inlinePort > 0 && inlinePort < 65536 ? inlinePort : 5555;
     if (!host) {
       Alert.alert('TV IP required', 'Enter the TV IP address, then try again.');
       return;
@@ -41,21 +53,48 @@ const DevicesScreen: React.FC = () => {
     }
   }, [addDevice, devices, ipAddress, port, setSelectedDevice, updateDevice]);
 
-  const scanNetwork = React.useCallback(async () => {
+  const scanNetwork = React.useCallback(async (silent = false) => {
+    if (scanning) return;
     setScanning(true);
     try {
       const endpoints = await TvControlService.scanWifiDevices();
       if (!endpoints.length) {
-        Alert.alert('No ADB TVs found', 'Only TVs with ADB TCP enabled on port 5555 can be discovered.');
+        if (!silent) Alert.alert('No ADB TVs found', 'Only TVs with ADB TCP enabled on port 5555 can be discovered.');
         return;
       }
       await Promise.all(endpoints.map((endpoint: { ipAddress: string; port: number }) => connect(endpoint.ipAddress, endpoint.port)));
     } catch (error: any) {
-      Alert.alert('Scan failed', error?.message || 'Connect the phone to Wi-Fi and try again.');
+      if (!silent) Alert.alert('Scan failed', error?.message || 'Connect the phone to Wi-Fi and try again.');
     } finally {
       setScanning(false);
     }
-  }, [connect]);
+  }, [connect, scanning]);
+
+  const pairGoogleTv = async () => {
+    if (!pairIp || !pairPort || !pairCode) {
+      Alert.alert('Missing Info', 'Enter IP, Pairing Port, and 6-digit Code from the TV\'s Wireless Debugging screen.');
+      return;
+    }
+    setPairing(true);
+    try {
+      await TvControlService.pairWifiDevice(pairIp.trim(), Number(pairPort), pairCode.trim());
+      Alert.alert('Success', 'Paired successfully! Now you can connect to the TV using the main connection port.');
+      setShowPairing(false);
+    } catch (error: any) {
+      Alert.alert('Pairing Failed', error?.message || 'Check the code and port and try again.');
+    } finally {
+      setPairing(false);
+    }
+  };
+
+  React.useEffect(() => {
+    TvControlService.getConnectedDevices().then(setDevices).catch(console.error);
+    
+    // Auto-scan silently on mount
+    scanNetwork(true);
+    
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <ScrollView style={styles.container}>
@@ -64,32 +103,46 @@ const DevicesScreen: React.FC = () => {
       </View>
 
       <View style={styles.connectCard}>
-        <Text style={styles.label}>IP Address</Text>
+        <Text style={styles.label}>TV IP ADDRESS (e.g. 192.168.1.20)</Text>
         <TextInput
           style={styles.input}
           value={ipAddress}
           onChangeText={setIpAddress}
           placeholder="192.168.1.20"
           placeholderTextColor={Colors.textSecondary}
+          keyboardType="default"
+          autoCapitalize="none"
         />
 
-        <Text style={styles.label}>Port</Text>
-        <TextInput
-          style={styles.input}
-          value={port}
-          onChangeText={setPort}
-          placeholder="5555"
-          placeholderTextColor={Colors.textSecondary}
-          keyboardType="number-pad"
-        />
-
-        <TouchableOpacity style={[styles.button, connecting && styles.buttonDisabled]} onPress={() => connect()} disabled={connecting || scanning}>
+        <TouchableOpacity style={[styles.button, connecting && styles.buttonDisabled]} onPress={() => connect()} disabled={connecting || scanning || pairing}>
           {connecting ? <ActivityIndicator color={Colors.text} /> : <Text style={styles.buttonText}>CONNECT</Text>}
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.button, styles.buttonSecondary, scanning && styles.buttonDisabled]} onPress={scanNetwork} disabled={connecting || scanning}>
+        <TouchableOpacity style={[styles.button, styles.buttonSecondary, scanning && styles.buttonDisabled]} onPress={() => scanNetwork()} disabled={connecting || scanning || pairing}>
           {scanning ? <ActivityIndicator color={Colors.text} /> : <Text style={styles.buttonText}>SCAN NETWORK</Text>}
         </TouchableOpacity>
+        
+        <TouchableOpacity style={{ marginTop: 16, alignItems: 'center' }} onPress={() => setShowPairing(!showPairing)}>
+          <Text style={{ color: Colors.primary, fontWeight: '600' }}>
+            {showPairing ? 'Hide Google TV Pairing' : 'Pair Google TV (Android 11+)'}
+          </Text>
+        </TouchableOpacity>
+
+        {showPairing && (
+          <View style={{ marginTop: 16, borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 16 }}>
+            <Text style={styles.label}>PAIRING IP & PORT</Text>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TextInput style={[styles.input, { flex: 2 }]} value={pairIp} onChangeText={setPairIp} placeholder="192.168.1.20" placeholderTextColor={Colors.textSecondary} />
+              <TextInput style={[styles.input, { flex: 1 }]} value={pairPort} onChangeText={setPairPort} placeholder="Port" placeholderTextColor={Colors.textSecondary} keyboardType="number-pad" />
+            </View>
+            <Text style={styles.label}>6-DIGIT PAIRING CODE</Text>
+            <TextInput style={styles.input} value={pairCode} onChangeText={setPairCode} placeholder="123456" placeholderTextColor={Colors.textSecondary} keyboardType="number-pad" />
+            <TouchableOpacity style={[styles.button, pairing && styles.buttonDisabled, { backgroundColor: Colors.success }]} onPress={pairGoogleTv} disabled={pairing}>
+              {pairing ? <ActivityIndicator color={Colors.text} /> : <Text style={styles.buttonText}>PAIR DEVICE</Text>}
+            </TouchableOpacity>
+          </View>
+        )}
+
       </View>
 
       <View style={styles.devicesList}>
@@ -112,6 +165,11 @@ const DevicesScreen: React.FC = () => {
               <TouchableOpacity style={styles.selectButton} onPress={() => toggleDeviceSelection(device.deviceId)}>
                 <Text style={styles.controlButtonText}>{selectedDeviceIds.includes(device.deviceId) ? 'SELECTED' : 'SELECT'}</Text>
               </TouchableOpacity>
+              {device.state !== 'Connected' && (
+                <TouchableOpacity style={[styles.controlButton, { backgroundColor: Colors.success }]} onPress={() => connect(device.ipAddress, device.port)} disabled={connecting}>
+                  <Text style={styles.controlButtonText}>CONNECT</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity style={styles.controlButton} onPress={() => { setSelectedDevice(device.deviceId); navigation.navigate('DeviceDetails', { deviceId: device.deviceId }); }}>
                 <Text style={styles.controlButtonText}>CONTROL</Text>
               </TouchableOpacity>

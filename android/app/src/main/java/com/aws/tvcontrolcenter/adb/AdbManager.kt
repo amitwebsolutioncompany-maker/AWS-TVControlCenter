@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
+import android.view.Surface
 
 class AdbManager(private val context: Context) {
     
@@ -14,6 +15,7 @@ class AdbManager(private val context: Context) {
     val devicesState: StateFlow<List<AdbDevice>> = _devicesState
     
     private val transports = ConcurrentHashMap<String, AdbTransport>()
+    private val savedWifiDevices = context.getSharedPreferences("saved_wifi_adb_devices", Context.MODE_PRIVATE)
     
     suspend fun connectWifiDevice(ip: String, port: Int = 5555): Result<AdbDevice> = withContext(Dispatchers.IO) {
         try {
@@ -43,6 +45,7 @@ class AdbManager(private val context: Context) {
             
             if (connectResult.isSuccess) {
                 transports[deviceId] = transport
+                saveWifiDevice(ip, port)
                 val updatedDevice = device.copy(state = AdbConnectionState.Connected)
                 devices[deviceId] = updatedDevice
                 _devicesState.value = devices.values.toList()
@@ -53,7 +56,13 @@ class AdbManager(private val context: Context) {
                 if (infoResult.isSuccess) {
                     val info = infoResult.getOrNull() ?: emptyMap()
                     val deviceInfo = parseDeviceInfo(info)
-                    finalDevice = updatedDevice.copy(deviceInfo = deviceInfo)
+                    // Display the real device name and Android version as soon
+                    // as the connection is authenticated. This prevents the UI
+                    // from being stuck at "Android Unknown" after auto-connect.
+                    finalDevice = updatedDevice.copy(
+                        name = deviceInfo.model.ifBlank { updatedDevice.name },
+                        deviceInfo = deviceInfo,
+                    )
                     devices[deviceId] = finalDevice
                     _devicesState.value = devices.values.toList()
                 }
@@ -137,6 +146,33 @@ class AdbManager(private val context: Context) {
     
     fun getAllDevices(): List<AdbDevice> {
         return devices.values.toList()
+    }
+
+    fun startMirror(deviceId: String, surface: Surface, sessionId: String, onStatus: (String) -> Unit) {
+        val transport = transports[deviceId] as? WifiAdbTransport ?: error("Screen mirror requires a Wi-Fi ADB TV connection")
+        transport.startMirror(context, surface, sessionId, onStatus)
+    }
+
+    fun stopMirror(deviceId: String) { (transports[deviceId] as? WifiAdbTransport)?.stopMirror() }
+    fun mirrorTouch(deviceId: String, action: Int, x: Float, y: Float, width: Int, height: Int) { (transports[deviceId] as? WifiAdbTransport)?.mirrorTouch(action, x, y, width, height) }
+
+    /** Retain known endpoints across launches for immediate reconnection. */
+    fun getSavedWifiDevices(): List<Pair<String, Int>> = savedWifiDevices
+        .getStringSet("endpoints", emptySet())
+        .orEmpty()
+        .mapNotNull { value ->
+            val separator = value.lastIndexOf(':')
+            if (separator <= 0) null else {
+                val host = value.substring(0, separator)
+                val port = value.substring(separator + 1).toIntOrNull()
+                if (port == null || port !in 1..65535) null else host to port
+            }
+        }
+
+    private fun saveWifiDevice(ip: String, port: Int) {
+        val endpoints = savedWifiDevices.getStringSet("endpoints", emptySet()).orEmpty().toMutableSet()
+        endpoints.add("$ip:$port")
+        savedWifiDevices.edit().putStringSet("endpoints", endpoints).apply()
     }
     
     private fun parseDeviceInfo(info: Map<String, String>): AdbDevice.DeviceInfo {

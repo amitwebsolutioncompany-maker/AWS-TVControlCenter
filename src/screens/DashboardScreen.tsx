@@ -29,17 +29,38 @@ const DashboardScreen: React.FC = () => {
   const scanTvs = async () => {
     setScanning(true);
     try {
-      const endpoints = await TvControlService.scanWifiDevices();
+      const [saved, discovered] = await Promise.all([
+        TvControlService.getSavedWifiDevices().catch(() => []),
+        TvControlService.scanWifiDevices().catch(() => []),
+      ]);
+      const seen = new Set<string>();
+      const endpoints = [...saved, ...discovered].filter((endpoint: {ipAddress:string;port:number}) => {
+        const key = `${endpoint.ipAddress}:${endpoint.port}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
       if (!endpoints.length) {
-        Alert.alert('No ADB TVs found', 'Enable Wireless debugging / ADB TCP on the TV, then use the TVs page to connect manually.');
+        Alert.alert('No classic ADB TVs found', 'For Google TV, open TVs → Pair Google TV, then enter the pairing port and 6-digit code shown on the TV. After its first connection it will auto-reconnect here.');
+        navigation.navigate('TVs');
         return;
       }
       const results = await Promise.allSettled(endpoints.map((endpoint: any) =>
         TvControlService.connectWifiDevice(endpoint.ipAddress, endpoint.port),
       ));
       const connected = results.filter(result => result.status === 'fulfilled').map(result => (result as PromiseFulfilledResult<any>).value);
-      connected.forEach(device => addDevice(device));
-      Alert.alert('TV scan complete', `${connected.length}/${endpoints.length} discovered TV(s) connected. TVs are now globally selected.`);
+      connected.forEach(device => {
+        addDevice(device);
+        // A connected device is useful even if a vendor briefly delays props.
+        // Refreshing makes Android version/model populate instead of Unknown.
+        TvControlService.getDeviceInfo(device.deviceId).then(info => updateDevice(device.deviceId, { deviceInfo: {
+          serial: info['ro.serialno'] || '', manufacturer: info['ro.product.manufacturer'] || '', model: info['ro.product.model'] || '',
+          androidVersion: info['ro.build.version.release'] || '', sdkVersion: Number(info['ro.build.version.sdk']) || 0,
+          screenResolution: info.screen_size || '', density: info.density || '', storage: info.storage || '',
+        } })).catch(() => undefined);
+      });
+      const waiting = endpoints.length - connected.length;
+      Alert.alert('TV scan complete', `${connected.length}/${endpoints.length} TV(s) connected and selected.${waiting ? ` ${waiting} TV(s) need Allow on TV or Google TV pairing; see the TVs page.` : ''}`);
       navigation.navigate('TVs');
     } catch (error: any) {
       Alert.alert('Scan failed', error?.message || 'Connect the controller and TVs to the same Wi-Fi network.');

@@ -12,6 +12,7 @@ interface DeviceState {
   toggleDeviceSelection: (deviceId: string) => void;
   selectAllConnected: () => void;
   clearDevices: () => void;
+  setDevices: (devices: TvDevice[]) => void;
 }
 
 export const useDeviceStore = create<DeviceState>((set) => ({
@@ -68,4 +69,5 @@ export const useDeviceStore = create<DeviceState>((set) => ({
     selectedDeviceIds: state.devices.filter(device => device.state === 'Connected').map(device => device.deviceId),
   })),
   clearDevices: () => set({ devices: [], selectedDeviceId: null, selectedDeviceIds: [] }),
+  setDevices: (devices) => set({ devices }),
 }));

@@ -7,6 +7,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import android.content.Context
+import android.view.Surface
+import com.aws.tvcontrolcenter.mirror.ScrcpyMirrorSession
 
 /** Real TCP ADB transport, including the binary protocol and RSA authorization. */
 class WifiAdbTransport(
@@ -14,6 +17,7 @@ class WifiAdbTransport(
     private val port: Int = 5555
 ) : AdbTransport {
     private var client: Kadb? = null
+    private var mirror: ScrcpyMirrorSession? = null
     private val commandMutex = Mutex()
 
     override suspend fun connect(): Result<Unit> = withContext(Dispatchers.IO) {
@@ -42,11 +46,22 @@ class WifiAdbTransport(
     }
 
     override suspend fun disconnect(): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching { client?.close(); client = null }
+        runCatching { mirror?.stop(); mirror = null; client?.close(); client = null }
     }
 
     override fun isConnected(): Boolean = client != null
     private fun adb(): Kadb = client ?: error("Device is not connected")
+
+    fun startMirror(context: Context, surface: Surface, sessionId: String, onStatus: (String) -> Unit) {
+        check(isConnected()) { "Device is not connected" }
+        mirror?.stop()
+        val server = File(context.cacheDir, "scrcpy-server-v2.1.1")
+        context.assets.open("scrcpy-server-v2.1.1").use { input -> server.outputStream().use { input.copyTo(it) } }
+        mirror = ScrcpyMirrorSession(adb(), server).also { it.start(surface, sessionId, onStatus) }
+    }
+
+    fun stopMirror() { mirror?.stop(); mirror = null }
+    fun mirrorTouch(action: Int, x: Float, y: Float, width: Int, height: Int) { mirror?.sendTouch(action, x, y, width, height) }
 
     override suspend fun shell(command: String): Result<AdbCommandResult> = withContext(Dispatchers.IO) {
         runCatching {
@@ -100,13 +115,18 @@ class WifiAdbTransport(
             withConnectedClient { runShell("ls -lan ${quote(remotePath)}") }.lineSequence()
                 .filter { it.isNotBlank() && !it.startsWith("total ") }
                 .mapNotNull { line ->
-                    val parts = line.trim().split(Regex("\\s+"), limit = 7)
-                    if (parts.size < 7) null else mapOf("permissions" to parts[0], "size" to parts[4], "name" to parts[6])
+                    // Android's ls -lan emits: permissions, links, owner,
+                    // group, size, date, time, name. Keep the final field
+                    // intact so directory names may themselves contain spaces.
+                    val parts = line.trim().split(Regex("\\s+"), limit = 8)
+                    if (parts.size < 8) null else mapOf("permissions" to parts[0], "size" to parts[4], "name" to parts[7])
                 }.toList()
         }
     }
 
-    override suspend fun deleteFile(remotePath: String): Result<Unit> = runUnit("rm -f ${quote(remotePath)}")
+    // The Files screen can delete either a file or a directory. -r handles
+    // folders; quote() ensures a TV-side shell cannot interpret the name.
+    override suspend fun deleteFile(remotePath: String): Result<Unit> = runUnit("rm -rf ${quote(remotePath)}")
     override suspend fun disablePackage(packageName: String) = shell("pm disable-user --user 0 ${quote(packageName)}")
     override suspend fun enablePackage(packageName: String) = shell("pm enable --user 0 ${quote(packageName)}")
     override suspend fun uninstallPackage(packageName: String) = shell("pm uninstall ${quote(packageName)}")

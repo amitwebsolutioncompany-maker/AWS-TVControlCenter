@@ -1,9 +1,13 @@
 package com.aws.tvcontrolcenter.bridge
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.aws.tvcontrolcenter.adb.AdbManager
 import com.aws.tvcontrolcenter.adb.AdbDevice
+import com.flyfishxu.kadb.Kadb
 import com.aws.tvcontrolcenter.usb.UsbDeviceManager
 import com.aws.tvcontrolcenter.usb.UsbPermissionManager
 import kotlinx.coroutines.CoroutineScope
@@ -20,7 +24,11 @@ import java.util.concurrent.Executors
 
 class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
     
-    private val adbManager = AdbManager(reactContext)
+    companion object {
+        var adbManager: AdbManager? = null
+    }
+
+    private val localAdbManager = AdbManager(reactContext)
     private val usbDeviceManager = UsbDeviceManager(reactContext)
     private val usbPermissionManager = UsbPermissionManager(reactContext)
     // Native connection failures must never terminate React Native's module
@@ -31,6 +39,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     
     override fun initialize() {
         super.initialize()
+        adbManager = localAdbManager
         usbDeviceManager.startListening()
         usbPermissionManager.startListening()
     }
@@ -39,16 +48,29 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
         super.onCatalystInstanceDestroy()
         usbDeviceManager.stopListening()
         usbPermissionManager.stopListening()
+        adbManager = null
     }
     
     @ReactMethod
     fun scanWifiDevices(promise: Promise) {
         scope.launch(Dispatchers.IO) {
             try {
-                val localAddress = NetworkInterface.getNetworkInterfaces().toList()
-                    .flatMap { it.inetAddresses.toList() }
-                    .filterIsInstance<Inet4Address>()
-                    .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
+                // Scan the Wi-Fi transport specifically. `activeNetwork` may
+                // be cellular/VPN when a Wi-Fi LAN has no internet, which made
+                // same-network TVs disappear after the auto-connect change.
+                val connectivity = reactApplicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val wifiNetwork = connectivity.allNetworks.firstOrNull { network ->
+                    connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+                }
+                val localAddress = connectivity.getLinkProperties(wifiNetwork)
+                    ?.linkAddresses
+                    ?.map { it.address }
+                    ?.filterIsInstance<Inet4Address>()
+                    ?.firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
+                    ?: NetworkInterface.getNetworkInterfaces().toList()
+                        .flatMap { it.inetAddresses.toList() }
+                        .filterIsInstance<Inet4Address>()
+                        .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
                     ?: throw IllegalStateException("No active Wi-Fi/LAN IPv4 address found")
 
                 // ADB TCP devices conventionally listen on 5555.  This probes
@@ -80,6 +102,18 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
             }
         }
     }
+
+    @ReactMethod
+    fun getSavedWifiDevices(promise: Promise) {
+        val devices = Arguments.createArray()
+        localAdbManager.getSavedWifiDevices().forEach { (ip, port) ->
+            val map = Arguments.createMap()
+            map.putString("ipAddress", ip)
+            map.putInt("port", port)
+            devices.pushMap(map)
+        }
+        promise.resolve(devices)
+    }
     
     @ReactMethod
     fun connectWifiDevice(ip: String, port: Int, promise: Promise) {
@@ -89,7 +123,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
                 require(host.isNotEmpty()) { "TV IP address is required" }
                 require(port in 1..65535) { "Port must be between 1 and 65535" }
 
-                val result = adbManager.connectWifiDevice(host, port)
+                val result = localAdbManager.connectWifiDevice(host, port)
                 if (result.isSuccess) {
                     val device = result.getOrNull() ?: error("Connection returned no device")
                     // WritableMap ownership is transferred when it is emitted
@@ -98,6 +132,13 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
                     promise.resolve(deviceToMap(device))
                 } else {
                     val message = result.exceptionOrNull()?.message ?: "Unable to connect to ADB on $host:$port"
+                    // Keep a discoverable TV visible when it is waiting for
+                    // the user to approve the new ADB key on the TV screen.
+                    // Previously this state was silently discarded by the
+                    // startup reconnect loop, so the TV appeared to vanish.
+                    localAdbManager.getDevice("wifi_${host}_$port")?.let { failedDevice ->
+                        emitEvent("deviceConnected", deviceToMap(failedDevice))
+                    }
                     promise.reject("CONNECTION_ERROR", message, result.exceptionOrNull())
                 }
             } catch (error: Throwable) {
@@ -107,11 +148,29 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
             }
         }
     }
+
+    /** Android 11+ Wireless debugging: this explicitly performs the TV-side
+     * pairing-code authorization. It never attempts to bypass that consent. */
+    @ReactMethod
+    fun pairWifiDevice(ip: String, port: Int, pairingCode: String, promise: Promise) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val host = ip.trim()
+                require(host.isNotEmpty()) { "Google TV IP address is required" }
+                require(port in 1..65535) { "Pairing port must be between 1 and 65535" }
+                require(pairingCode.trim().matches(Regex("\\d{6}"))) { "Enter the 6-digit code shown on the TV" }
+                Kadb.pair(host, port, pairingCode.trim(), "TV Control Center")
+                promise.resolve(null)
+            } catch (error: Throwable) {
+                promise.reject("PAIRING_ERROR", error.message ?: "Google TV pairing failed", error)
+            }
+        }
+    }
     
     @ReactMethod
     fun disconnectDevice(deviceId: String, promise: Promise) {
         scope.launch {
-            val result = adbManager.disconnectDevice(deviceId)
+            val result = localAdbManager.disconnectDevice(deviceId)
             if (result.isSuccess) {
                 emitEvent("deviceDisconnected", deviceId)
                 promise.resolve(null)
@@ -153,7 +212,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
         val device = usbDeviceManager.getUsbDevice(deviceId)
         if (device != null) {
             scope.launch {
-                val result = adbManager.connectUsbDevice(device)
+                val result = localAdbManager.connectUsbDevice(device)
                 if (result.isSuccess) {
                     val connectedDevice = result.getOrNull() ?: error("Connection returned no device")
                     emitEvent("deviceConnected", deviceToMap(connectedDevice))
@@ -170,7 +229,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun shell(deviceId: String, command: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.shell(command)
                 if (result.isSuccess) {
@@ -193,7 +252,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun installApk(deviceId: String, localPath: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.installApk(localPath)
                 if (result.isSuccess) {
@@ -210,7 +269,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun pushFile(deviceId: String, localPath: String, remotePath: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.push(localPath, remotePath)
                 if (result.isSuccess) {
@@ -227,7 +286,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun pullFile(deviceId: String, remotePath: String, localPath: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.pull(remotePath, localPath)
                 if (result.isSuccess) {
@@ -244,7 +303,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun listFiles(deviceId: String, remotePath: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.listFiles(remotePath)
                 if (result.isSuccess) {
@@ -270,7 +329,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun deleteFile(deviceId: String, remotePath: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.deleteFile(remotePath)
                 if (result.isSuccess) {
@@ -287,7 +346,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun getDeviceInfo(deviceId: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.getDeviceInfo()
                 if (result.isSuccess) {
@@ -309,7 +368,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun disablePackage(deviceId: String, packageName: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.disablePackage(packageName)
                 if (result.isSuccess) {
@@ -332,7 +391,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun enablePackage(deviceId: String, packageName: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.enablePackage(packageName)
                 if (result.isSuccess) {
@@ -355,7 +414,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun uninstallPackage(deviceId: String, packageName: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.uninstallPackage(packageName)
                 if (result.isSuccess) {
@@ -378,7 +437,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun forceStopPackage(deviceId: String, packageName: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.forceStopPackage(packageName)
                 if (result.isSuccess) {
@@ -401,7 +460,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun launchPackage(deviceId: String, packageName: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.launchPackage(packageName)
                 if (result.isSuccess) {
@@ -424,7 +483,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun sendKeyEvent(deviceId: String, keyCode: Int, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.sendKeyEvent(keyCode)
                 if (result.isSuccess) {
@@ -441,7 +500,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun rebootDevice(deviceId: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.reboot()
                 if (result.isSuccess) {
@@ -458,7 +517,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun screenOn(deviceId: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.screenOn()
                 if (result.isSuccess) {
@@ -475,7 +534,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     @ReactMethod
     fun screenOff(deviceId: String, promise: Promise) {
         scope.launch {
-            val transport = adbManager.getTransport(deviceId)
+            val transport = localAdbManager.getTransport(deviceId)
             if (transport != null) {
                 val result = transport.screenOff()
                 if (result.isSuccess) {
@@ -491,7 +550,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     
     @ReactMethod
     fun getConnectedDevices(promise: Promise) {
-        val devices = adbManager.getAllDevices()
+        val devices = localAdbManager.getAllDevices()
         val array = Arguments.createArray()
         devices.forEach { device ->
             val map = Arguments.createMap()
@@ -535,6 +594,20 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
         reactApplicationContext
             .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
             .emit(eventName, data)
+    }
+
+    @ReactMethod
+    fun startMirrorActivity(deviceId: String, promise: Promise) {
+        try {
+            val intent = android.content.Intent(reactApplicationContext, com.aws.tvcontrolcenter.mirror.MirrorActivity::class.java).apply {
+                putExtra("deviceId", deviceId)
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            reactApplicationContext.startActivity(intent)
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("MIRROR_ERROR", e.message, e)
+        }
     }
 
     private fun deviceToMap(device: AdbDevice): WritableMap = Arguments.createMap().apply {

@@ -11,6 +11,7 @@ import com.flyfishxu.kadb.Kadb
 import com.aws.tvcontrolcenter.usb.UsbDeviceManager
 import com.aws.tvcontrolcenter.usb.UsbPermissionManager
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -51,70 +52,63 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
         adbManager = null
     }
     
+    private suspend fun scanNetworkForDevices(): List<Pair<String, Int>> = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        // Scan the Wi-Fi transport specifically. `activeNetwork` may
+        // be cellular/VPN when a Wi-Fi LAN has no internet, which made
+        // same-network TVs disappear after the auto-connect change.
+        val connectivity = reactApplicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val wifiNetwork = connectivity.allNetworks.firstOrNull { network ->
+            connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        }
+        val localAddress = connectivity.getLinkProperties(wifiNetwork)
+            ?.linkAddresses
+            ?.map { it.address }
+            ?.filterIsInstance<Inet4Address>()
+            ?.firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
+            ?: NetworkInterface.getNetworkInterfaces().toList()
+                .flatMap { it.inetAddresses.toList() }
+                .filterIsInstance<Inet4Address>()
+                .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
+            ?: throw IllegalStateException("No active Wi-Fi/LAN IPv4 address found")
+
+        // ADB TCP devices conventionally listen on 5555.  This probes
+        // only the current /24, never a public or arbitrary network.
+        val bytes = localAddress.address
+        val prefix = "${bytes[0].toInt() and 0xff}.${bytes[1].toInt() and 0xff}.${bytes[2].toInt() and 0xff}."
+        val executor = Executors.newFixedThreadPool(24)
+        val candidates = try {
+            (1..254).map { host -> executor.submit(Callable {
+                val ip = "$prefix$host"
+                Socket().use { socket ->
+                    if (runCatching { socket.connect(InetSocketAddress(ip, 5555), 350) }.isSuccess) ip else null
+                }
+            }) }.mapNotNull { it.get() }
+        } finally {
+            executor.shutdownNow()
+        }
+
+        candidates.map { it to 5555 }
+    }
+
     @ReactMethod
     fun scanWifiDevices(promise: Promise) {
         scope.launch(Dispatchers.IO) {
             try {
-                // Scan the Wi-Fi transport specifically. `activeNetwork` may
-                // be cellular/VPN when a Wi-Fi LAN has no internet, which made
-                // same-network TVs disappear after the auto-connect change.
-                val connectivity = reactApplicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-                val wifiNetwork = connectivity.allNetworks.firstOrNull { network ->
-                    connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-                }
-                val localAddress = connectivity.getLinkProperties(wifiNetwork)
-                    ?.linkAddresses
-                    ?.map { it.address }
-                    ?.filterIsInstance<Inet4Address>()
-                    ?.firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
-                    ?: NetworkInterface.getNetworkInterfaces().toList()
-                        .flatMap { it.inetAddresses.toList() }
-                        .filterIsInstance<Inet4Address>()
-                        .firstOrNull { !it.isLoopbackAddress && it.isSiteLocalAddress }
-                    ?: throw IllegalStateException("No active Wi-Fi/LAN IPv4 address found")
-
-                // ADB TCP devices conventionally listen on 5555.  This probes
-                // only the current /24, never a public or arbitrary network.
-                val bytes = localAddress.address
-                val prefix = "${bytes[0].toInt() and 0xff}.${bytes[1].toInt() and 0xff}.${bytes[2].toInt() and 0xff}."
-                val executor = Executors.newFixedThreadPool(24)
-                val candidates = try {
-                    (1..254).map { host -> executor.submit(Callable {
-                        val ip = "$prefix$host"
-                        Socket().use { socket ->
-                            if (runCatching { socket.connect(InetSocketAddress(ip, 5555), 350) }.isSuccess) ip else null
-                        }
-                    }) }.mapNotNull { it.get() }
-                } finally {
-                    executor.shutdownNow()
-                }
-
-                val devices = Arguments.createArray()
-                candidates.forEach { ip ->
+                val devices = scanNetworkForDevices()
+                val array = Arguments.createArray()
+                devices.forEach { (ip, port) ->
                     val map = Arguments.createMap()
                     map.putString("ipAddress", ip)
-                    map.putInt("port", 5555)
-                    devices.pushMap(map)
+                    map.putInt("port", port)
+                    array.pushMap(map)
                 }
-                promise.resolve(devices)
-            } catch (error: Exception) {
-                promise.reject("SCAN_ERROR", error.message, error)
+                promise.resolve(array)
+            } catch (error: Throwable) {
+                promise.reject("SCAN_ERROR", error.message ?: "Wi-Fi scan failed", error)
             }
         }
     }
 
-    @ReactMethod
-    fun getSavedWifiDevices(promise: Promise) {
-        val devices = Arguments.createArray()
-        localAdbManager.getSavedWifiDevices().forEach { (ip, port) ->
-            val map = Arguments.createMap()
-            map.putString("ipAddress", ip)
-            map.putInt("port", port)
-            devices.pushMap(map)
-        }
-        promise.resolve(devices)
-    }
-    
     @ReactMethod
     fun connectWifiDevice(ip: String, port: Int, promise: Promise) {
         scope.launch {
@@ -132,13 +126,7 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
                     promise.resolve(deviceToMap(device))
                 } else {
                     val message = result.exceptionOrNull()?.message ?: "Unable to connect to ADB on $host:$port"
-                    // Keep a discoverable TV visible when it is waiting for
-                    // the user to approve the new ADB key on the TV screen.
-                    // Previously this state was silently discarded by the
-                    // startup reconnect loop, so the TV appeared to vanish.
-                    localAdbManager.getDevice("wifi_${host}_$port")?.let { failedDevice ->
-                        emitEvent("deviceConnected", deviceToMap(failedDevice))
-                    }
+                    // Don't add failed devices to the list - only show successfully connected TVs
                     promise.reject("CONNECTION_ERROR", message, result.exceptionOrNull())
                 }
             } catch (error: Throwable) {
@@ -160,7 +148,14 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
                 require(port in 1..65535) { "Pairing port must be between 1 and 65535" }
                 require(pairingCode.trim().matches(Regex("\\d{6}"))) { "Enter the 6-digit code shown on the TV" }
                 Kadb.pair(host, port, pairingCode.trim(), "TV Control Center")
-                promise.resolve(null)
+                
+                // Pairing successful - return success without auto-scanning
+                // User should check TV screen for the actual ADB port and connect manually
+                val result = Arguments.createMap()
+                result.putString("ipAddress", host)
+                result.putInt("port", port)
+                result.putBoolean("success", true)
+                promise.resolve(result)
             } catch (error: Throwable) {
                 promise.reject("PAIRING_ERROR", error.message ?: "Google TV pairing failed", error)
             }

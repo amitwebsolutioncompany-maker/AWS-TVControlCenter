@@ -16,7 +16,6 @@ class AdbManager(private val context: Context) {
     val devicesState: StateFlow<List<AdbDevice>> = _devicesState
     
     private val transports = ConcurrentHashMap<String, AdbTransport>()
-    private val savedWifiDevices = context.getSharedPreferences("saved_wifi_adb_devices", Context.MODE_PRIVATE)
     private val connectMutex = kotlinx.coroutines.sync.Mutex()
     
     suspend fun connectWifiDevice(ip: String, port: Int = 5555): Result<AdbDevice> = withContext(Dispatchers.IO) {
@@ -48,7 +47,6 @@ class AdbManager(private val context: Context) {
             
             if (connectResult.isSuccess) {
                 transports[deviceId] = transport
-                saveWifiDevice(ip, port)
                 val updatedDevice = device.copy(state = AdbConnectionState.Connected)
                 devices[deviceId] = updatedDevice
                 _devicesState.value = devices.values.toList()
@@ -160,25 +158,6 @@ class AdbManager(private val context: Context) {
     fun stopMirror(deviceId: String) { (transports[deviceId] as? WifiAdbTransport)?.stopMirror() }
     fun mirrorTouch(deviceId: String, action: Int, x: Float, y: Float, width: Int, height: Int) { (transports[deviceId] as? WifiAdbTransport)?.mirrorTouch(action, x, y, width, height) }
 
-    /** Retain known endpoints across launches for immediate reconnection. */
-    fun getSavedWifiDevices(): List<Pair<String, Int>> = savedWifiDevices
-        .getStringSet("endpoints", emptySet())
-        .orEmpty()
-        .mapNotNull { value ->
-            val separator = value.lastIndexOf(':')
-            if (separator <= 0) null else {
-                val host = value.substring(0, separator)
-                val port = value.substring(separator + 1).toIntOrNull()
-                if (port == null || port !in 1..65535) null else host to port
-            }
-        }
-
-    private fun saveWifiDevice(ip: String, port: Int) {
-        val endpoints = savedWifiDevices.getStringSet("endpoints", emptySet()).orEmpty().toMutableSet()
-        endpoints.add("$ip:$port")
-        savedWifiDevices.edit().putStringSet("endpoints", endpoints).apply()
-    }
-    
     private fun parseDeviceInfo(info: Map<String, String>): AdbDevice.DeviceInfo {
         return AdbDevice.DeviceInfo(
             serial = info["ro.serialno"] ?: "",

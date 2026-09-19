@@ -10,9 +10,8 @@ const eventEmitter = new NativeEventEmitter(TvControlModule);
 
 export interface TvControlService {
   scanWifiDevices: () => Promise<any[]>;
-  getSavedWifiDevices: () => Promise<Array<{ipAddress: string; port: number}>>;
   connectWifiDevice: (ip: string, port: number) => Promise<any>;
-  pairWifiDevice: (ip: string, port: number, pairingCode: string) => Promise<void>;
+  pairWifiDevice: (ip: string, port: number, pairingCode: string) => Promise<{ ipAddress: string; port: number; found: boolean }>;
   disconnectDevice: (deviceId: string) => Promise<void>;
   scanUsbDevices: () => Promise<any[]>;
   requestUsbPermission: (deviceId: string) => Promise<boolean>;

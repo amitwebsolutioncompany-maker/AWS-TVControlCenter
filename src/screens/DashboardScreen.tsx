@@ -13,7 +13,7 @@ const DashboardScreen: React.FC = () => {
   
   const connectedCount = devices.filter(d => d.state === 'Connected').length;
   const onlineCount = connectedCount;
-  const offlineCount = devices.filter(d => d.state !== 'Connected').length;
+  const offlineCount = devices.filter(d => d.state === 'Disconnected' || d.state === 'Error').length;
   const refreshTvStatus = async () => {
     setRefreshing(true);
     try {
@@ -29,23 +29,13 @@ const DashboardScreen: React.FC = () => {
   const scanTvs = async () => {
     setScanning(true);
     try {
-      const [saved, discovered] = await Promise.all([
-        TvControlService.getSavedWifiDevices().catch(() => []),
-        TvControlService.scanWifiDevices().catch(() => []),
-      ]);
-      const seen = new Set<string>();
-      const endpoints = [...saved, ...discovered].filter((endpoint: {ipAddress:string;port:number}) => {
-        const key = `${endpoint.ipAddress}:${endpoint.port}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-      if (!endpoints.length) {
-        Alert.alert('No classic ADB TVs found', 'For Google TV, open TVs → Pair Google TV, then enter the pairing port and 6-digit code shown on the TV. After its first connection it will auto-reconnect here.');
+      const discovered = await TvControlService.scanWifiDevices().catch(() => []);
+      if (!discovered.length) {
+        Alert.alert('No ADB TVs found', 'Make sure TVs are on the same network and have ADB/Developer Options enabled. For Google TV, use Pair Google TV option.');
         navigation.navigate('TVs');
         return;
       }
-      const results = await Promise.allSettled(endpoints.map((endpoint: any) =>
+      const results = await Promise.allSettled(discovered.map((endpoint: any) =>
         TvControlService.connectWifiDevice(endpoint.ipAddress, endpoint.port),
       ));
       const connected = results.filter(result => result.status === 'fulfilled').map(result => (result as PromiseFulfilledResult<any>).value);
@@ -59,8 +49,8 @@ const DashboardScreen: React.FC = () => {
           screenResolution: info.screen_size || '', density: info.density || '', storage: info.storage || '',
         } })).catch(() => undefined);
       });
-      const waiting = endpoints.length - connected.length;
-      Alert.alert('TV scan complete', `${connected.length}/${endpoints.length} TV(s) connected and selected.${waiting ? ` ${waiting} TV(s) need Allow on TV or Google TV pairing; see the TVs page.` : ''}`);
+      const waiting = discovered.length - connected.length;
+      Alert.alert('TV scan complete', `${connected.length}/${discovered.length} TV(s) connected.${waiting ? ` ${waiting} TV(s) need "Allow" on TV screen - check your TV for authorization prompt.` : ''}`);
       navigation.navigate('TVs');
     } catch (error: any) {
       Alert.alert('Scan failed', error?.message || 'Connect the controller and TVs to the same Wi-Fi network.');

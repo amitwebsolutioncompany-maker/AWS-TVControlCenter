@@ -1,9 +1,11 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { useDeviceStore } from '../store/deviceStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors } from '../constants/colors';
 import { TvControlService } from '../services/TvControlService';
+import { useDeviceStore } from '../store/deviceStore';
+import { getSelectedConnectedDevices } from '../utils/selectedDevice';
 
 const DevicesScreen: React.FC = () => {
   const { devices, addDevice, setSelectedDevice, selectedDeviceIds, toggleDeviceSelection, updateDevice, removeDevice, setDevices } = useDeviceStore();
@@ -37,21 +39,64 @@ const DevicesScreen: React.FC = () => {
       const device = await TvControlService.connectWifiDevice(host, adbPort);
       addDevice(device);
       setSelectedDevice(device.deviceId);
-      // Some Google TVs answer the initial connection probe before all system
-      // properties are ready. Refresh info separately so Android version is not
-      // unnecessarily displayed as Unknown.
-      try {
-        const info = await TvControlService.getDeviceInfo(device.deviceId);
-        updateDevice(device.deviceId, { deviceInfo: { serial:info['ro.serialno']||'', manufacturer:info['ro.product.manufacturer']||'', model:info['ro.product.model']||'', androidVersion:info['ro.build.version.release']||'', sdkVersion:Number(info['ro.build.version.sdk'])||0, screenResolution:info.screen_size||'', density:info.density||'', storage:info.storage||'' } });
-      } catch { /* Connection is valid; info can be refreshed later from Control. */ }
+      
+      // Save Google TV IP for auto-connect (if port is not default 5555)
+      if (adbPort !== 5555) {
+        await AsyncStorage.setItem('google_tv_ip', host);
+        await AsyncStorage.setItem('google_tv_port', adbPort.toString());
+      }
+      
+      // Fetch device info with retry for better reliability
+      const fetchDeviceInfo = async (retries = 3) => {
+        for (let i = 0; i < retries; i++) {
+          try {
+            await new Promise(resolve => setTimeout(resolve, 500)); // Wait for device to be ready
+            const info = await TvControlService.getDeviceInfo(device.deviceId);
+            if (info && info['ro.build.version.release']) {
+              updateDevice(device.deviceId, { 
+                deviceInfo: { 
+                  serial: info['ro.serialno'] || '', 
+                  manufacturer: info['ro.product.manufacturer'] || '', 
+                  model: info['ro.product.model'] || '', 
+                  androidVersion: info['ro.build.version.release'] || '', 
+                  sdkVersion: Number(info['ro.build.version.sdk']) || 0, 
+                  screenResolution: info.screen_size || '', 
+                  density: info.density || '', 
+                  storage: info.storage || '' 
+                } 
+              });
+              return true;
+            }
+          } catch (e) {
+            console.log(`Device info fetch attempt ${i + 1} failed:`, e);
+          }
+        }
+        // If all retries fail, set a default device info to avoid "Android Unknown"
+        updateDevice(device.deviceId, { 
+          deviceInfo: { 
+            serial: '', 
+            manufacturer: 'Unknown', 
+            model: 'Google TV', 
+            androidVersion: 'Connected', 
+            sdkVersion: 0, 
+            screenResolution: '', 
+            density: '', 
+            storage: '' 
+          } 
+        });
+        return false;
+      };
+      
+      fetchDeviceInfo();
     } catch (error: any) {
-      const existing = devices.find(device => device.deviceId === `wifi_${host}_${adbPort}`);
-      if (existing) updateDevice(existing.deviceId, { state: 'Error' });
-      Alert.alert('Connection failed', error?.message || 'Enable ADB TCP/Wireless Debugging on the TV and accept its authorization prompt.');
+      // Remove failed device from list - don't show error states
+      const deviceId = `wifi_${host}_${adbPort}`;
+      removeDevice(deviceId);
+      Alert.alert('Connection failed', error?.message || 'Enable ADB TCP/Wireless Debugging on the TV and check the TV screen for "Allow USB debugging" authorization prompt. Tap Allow to complete connection.');
     } finally {
       setConnecting(false);
     }
-  }, [addDevice, devices, ipAddress, port, setSelectedDevice, updateDevice]);
+  }, [addDevice, devices, ipAddress, port, setSelectedDevice, updateDevice, removeDevice]);
 
   const scanNetwork = React.useCallback(async (silent = false) => {
     if (scanning) return;
@@ -59,10 +104,36 @@ const DevicesScreen: React.FC = () => {
     try {
       const endpoints = await TvControlService.scanWifiDevices();
       if (!endpoints.length) {
-        if (!silent) Alert.alert('No ADB TVs found', 'Only TVs with ADB TCP enabled on port 5555 can be discovered.');
+        if (!silent) Alert.alert('No ADB TVs found', 'Only TVs with ADB TCP enabled on port 5555 can be discovered. Make sure Developer Options and ADB Debugging are enabled on your TV.');
         return;
       }
-      await Promise.all(endpoints.map((endpoint: { ipAddress: string; port: number }) => connect(endpoint.ipAddress, endpoint.port)));
+      let connectedCount = 0;
+      for (const endpoint of endpoints) {
+        try {
+          const device = await TvControlService.connectWifiDevice(endpoint.ipAddress, endpoint.port);
+          addDevice(device);
+          if (!selectedDeviceIds.length) setSelectedDevice(device.deviceId);
+          connectedCount++;
+        } catch {
+          // A TV can have port 5555 open but await authorization or not run adbd.
+        }
+      }
+      
+      // Try to connect to saved Google TV with its dynamic port
+      const savedIp = await AsyncStorage.getItem('google_tv_ip');
+      const savedPort = await AsyncStorage.getItem('google_tv_port');
+      if (savedIp && savedPort) {
+        try {
+          const device = await TvControlService.connectWifiDevice(savedIp, Number(savedPort));
+          addDevice(device);
+          if (!selectedDeviceIds.length) setSelectedDevice(device.deviceId);
+          connectedCount++;
+        } catch {
+          // Google TV might be offline or port changed
+        }
+      }
+      
+      if (!silent) Alert.alert('Scan complete', `${connectedCount} TV(s) connected successfully. For Google TV with dynamic ports, use the Pair Google TV feature.`);
     } catch (error: any) {
       if (!silent) Alert.alert('Scan failed', error?.message || 'Connect the phone to Wi-Fi and try again.');
     } finally {
@@ -75,22 +146,44 @@ const DevicesScreen: React.FC = () => {
       Alert.alert('Missing Info', 'Enter IP, Pairing Port, and 6-digit Code from the TV\'s Wireless Debugging screen.');
       return;
     }
+    
+    const portNum = parseInt(pairPort.trim(), 10);
+    if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
+      Alert.alert('Invalid Port', 'Port must be a number between 1 and 65535.');
+      return;
+    }
+    
+    if (pairCode.trim().length !== 6 || !/^\d{6}$/.test(pairCode.trim())) {
+      Alert.alert('Invalid Code', 'Pairing code must be exactly 6 digits.');
+      return;
+    }
+    
     setPairing(true);
     try {
-      await TvControlService.pairWifiDevice(pairIp.trim(), Number(pairPort), pairCode.trim());
-      Alert.alert('Success', 'Paired successfully! Now you can connect to the TV using the main connection port.');
+      const result = await TvControlService.pairWifiDevice(pairIp.trim(), portNum, pairCode.trim());
+      
+      Alert.alert(
+        'Pairing Successful!',
+        'TV paired successfully!\n\nNow check your TV screen for the ADB port number shown in Wireless Debugging settings. Use that port with the IP address to connect from the main CONNECT button.'
+      );
       setShowPairing(false);
+      
+      // Auto-fill the IP for easy connection
+      setIpAddress(pairIp.trim());
+      setPort(''); // Clear port so user enters the correct ADB port from TV
     } catch (error: any) {
-      Alert.alert('Pairing Failed', error?.message || 'Check the code and port and try again.');
+      console.error('Pairing error:', error);
+      Alert.alert('Pairing Failed', `Error: ${error?.message || 'Unknown error'}\n\nIP: ${pairIp}\nPort: ${pairPort}\nCode: ${pairCode}`);
     } finally {
       setPairing(false);
     }
   };
 
   React.useEffect(() => {
-    TvControlService.getConnectedDevices().then(setDevices).catch(console.error);
+    // Clear devices on mount - no persistence
+    setDevices([]);
     
-    // Auto-scan silently on mount
+    // Auto-scan silently on mount to discover TVs with ADB enabled
     scanNetwork(true);
     
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -121,15 +214,18 @@ const DevicesScreen: React.FC = () => {
         <TouchableOpacity style={[styles.button, styles.buttonSecondary, scanning && styles.buttonDisabled]} onPress={() => scanNetwork()} disabled={connecting || scanning || pairing}>
           {scanning ? <ActivityIndicator color={Colors.text} /> : <Text style={styles.buttonText}>SCAN NETWORK</Text>}
         </TouchableOpacity>
-        
-        <TouchableOpacity style={{ marginTop: 16, alignItems: 'center' }} onPress={() => setShowPairing(!showPairing)}>
-          <Text style={{ color: Colors.primary, fontWeight: '600' }}>
-            {showPairing ? 'Hide Google TV Pairing' : 'Pair Google TV (Android 11+)'}
+
+        <TouchableOpacity style={{ marginTop: 12, alignItems: 'center' }} onPress={() => setShowPairing(!showPairing)}>
+          <Text style={{ color: Colors.primary, fontWeight: '600', fontSize: 14 }}>
+            {showPairing ? '▼ Hide Google TV Pairing' : '▶ Pair Google TV (If "Allow" not showing)'}
           </Text>
         </TouchableOpacity>
 
         {showPairing && (
           <View style={{ marginTop: 16, borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 16 }}>
+            <Text style={{ color: Colors.textSecondary, fontSize: 13, marginBottom: 12 }}>
+              Steps: 1) Enable Developer Options on TV → 2) Enable Wireless Debugging → 3) Note IP:Port & 6-digit code → 4) Enter below
+            </Text>
             <Text style={styles.label}>PAIRING IP & PORT</Text>
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <TextInput style={[styles.input, { flex: 2 }]} value={pairIp} onChangeText={setPairIp} placeholder="192.168.1.20" placeholderTextColor={Colors.textSecondary} />

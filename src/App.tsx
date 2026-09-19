@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -6,9 +6,10 @@ import { StatusBar, Text } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { Colors } from './constants/colors';
 import { TvControlService } from './services/TvControlService';
-import { subscribeToDeviceConnected, subscribeToDeviceDisconnected } from './services/TvControlService';
+import { subscribeToDeviceConnected } from './services/TvControlService';
 import { useDeviceStore } from './store/deviceStore';
 
+import PasswordScreen from './screens/PasswordScreen';
 import DashboardScreen from './screens/DashboardScreen';
 import DevicesScreen from './screens/DevicesScreen';
 import DeviceDetailsScreen from './screens/DeviceDetailsScreen';
@@ -65,28 +66,30 @@ function MainTabs() {
 }
 
 export default function App() {
+  const [isUnlocked, setIsUnlocked] = useState(false);
+
   React.useEffect(() => {
+    if (!isUnlocked) return; // Don't start device discovery until unlocked
+
     const connected = subscribeToDeviceConnected((device) => useDeviceStore.getState().addDevice(device));
-    const disconnected = subscribeToDeviceDisconnected((deviceId) => useDeviceStore.getState().updateDevice(deviceId, { state: 'Disconnected' }));
-    // Reconnect TVs that expose classic ADB TCP.  adbd will still show its
-    // authorization dialog the first time; Android does not permit bypassing it.
+    // Don't auto-mark as disconnected - let actual connection status determine state
+    // This prevents TVs from incorrectly showing as offline when they're still connected
+    // Automatically discover and connect TVs on the network with ADB enabled
     const discoverAndConnect = async () => {
       try {
-        const [saved, scanned] = await Promise.all([
-          TvControlService.getSavedWifiDevices().catch(() => []),
-          TvControlService.scanWifiDevices().catch(() => []),
-        ]);
-        const seen = new Set<string>();
-        const endpoints = [...saved, ...scanned].filter((endpoint: { ipAddress: string; port: number }) => {
-          const key = `${endpoint.ipAddress}:${endpoint.port}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-        await Promise.all(endpoints.map(async (endpoint: { ipAddress: string; port: number }) => {
+        const scanned = await TvControlService.scanWifiDevices().catch(() => []);
+        const store = useDeviceStore.getState();
+        const existingDeviceIds = new Set(store.devices.map(d => d.deviceId));
+        
+        await Promise.all(scanned.map(async (endpoint: { ipAddress: string; port: number }) => {
+          const deviceId = `wifi_${endpoint.ipAddress}_${endpoint.port}`;
+          // Skip if device is already in our list and connected
+          if (existingDeviceIds.has(deviceId)) {
+            const existing = store.devices.find(d => d.deviceId === deviceId);
+            if (existing?.state === 'Connected') return;
+          }
           try {
             const device = await TvControlService.connectWifiDevice(endpoint.ipAddress, endpoint.port);
-            const store = useDeviceStore.getState();
             store.addDevice(device);
             if (!store.selectedDeviceId) store.setSelectedDevice(device.deviceId);
           } catch {
@@ -99,8 +102,17 @@ export default function App() {
     };
     discoverAndConnect();
     const interval = setInterval(discoverAndConnect, 60_000);
-    return () => { connected.remove(); disconnected.remove(); clearInterval(interval); };
-  }, []);
+    return () => { connected.remove(); clearInterval(interval); };
+  }, [isUnlocked]);
+
+  if (!isUnlocked) {
+    return (
+      <SafeAreaProvider>
+        <StatusBar barStyle="light-content" backgroundColor={Colors.background} />
+        <PasswordScreen onUnlock={() => setIsUnlocked(true)} />
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <SafeAreaProvider>

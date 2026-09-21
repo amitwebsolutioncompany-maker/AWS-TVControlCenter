@@ -26,8 +26,8 @@ class ScrcpyMirrorSession(private val adb: Kadb, private val serverFile: File) {
                 
                 onStatus("Starting server process...")
                 val command = "CLASSPATH=$SERVER_PATH app_process / com.genymobile.scrcpy.Server 2.1.1 " +
-                    "tunnel_forward=true audio=false control=true cleanup=true max_size=1280 max_fps=30 " +
-                    "video_bit_rate=4000000 send_device_meta=false send_dummy_byte=false send_codec_meta=true send_frame_meta=true"
+                    "tunnel_forward=true audio=false control=true cleanup=true max_size=1920 max_fps=60 " +
+                    "video_bit_rate=8000000 send_device_meta=false send_dummy_byte=false send_codec_meta=true send_frame_meta=true"
                 
                 Thread { 
                     runCatching { 
@@ -136,6 +136,15 @@ class ScrcpyMirrorSession(private val adb: Kadb, private val serverFile: File) {
         runCatching { video?.close() }; runCatching { control?.close() }
         video = null; control = null
         runCatching { codec?.stop() }; runCatching { codec?.release() }; codec = null
+        
+        // Kill scrcpy server on TV to prevent broken pipe on restart
+        Thread {
+            runCatching {
+                adb.shell("pkill -f scrcpy-server")
+            }.onFailure {
+                android.util.Log.e("Scrcpy", "Failed to kill scrcpy server", it)
+            }
+        }.apply { name = "scrcpy-cleanup"; start() }
     }
 
     /** scrcpy 4.1 INJECT_TOUCH_EVENT binary protocol. Coordinates are mapped
@@ -156,6 +165,8 @@ class ScrcpyMirrorSession(private val adb: Kadb, private val serverFile: File) {
                 stream.sink.writeInt(1) // ACTION_BUTTON_PRIMARY (always 1 for both DOWN and UP)
                 stream.sink.writeInt(if (action == 1) 0 else 1) // buttons
                 stream.sink.flush()
+            }.onFailure {
+                android.util.Log.e("Scrcpy", "Failed to send touch event", it)
             }
         }
     }

@@ -79,6 +79,8 @@ dependencies {
     // Real ADB client: handles the protocol and RSA authorization rather than
     // treating an open TCP port as an authenticated ADB connection.
     implementation("com.flyfishxu:kadb:1.2.1")
+    // WebSocket client for AWS-Signage TV remote control
+    implementation("org.java-websocket:Java-WebSocket:1.5.3")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")

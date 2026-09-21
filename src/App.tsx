@@ -23,7 +23,9 @@ import LogsScreen from './screens/LogsScreen';
 import PresetsScreen from './screens/PresetsScreen';
 import AboutScreen from './screens/AboutScreen';
 import MenuScreen from './screens/MenuScreen';
-import ScreenMirrorScreen from './screens/ScreenMirrorScreen';
+import SignageDiscoveryScreen from './screens/SignageDiscoveryScreen';
+import SignageControlScreen from './screens/SignageControlScreen';
+import CmsPanelScreen from './screens/CmsPanelScreen';
 import { GlobalHeader } from './components/GlobalHeader';
 
 type RootStackParamList = {
@@ -34,6 +36,8 @@ type RootStackParamList = {
   Logs: undefined;
   Presets: undefined;
   About: undefined;
+  SignageDiscovery: undefined;
+  SignageControl: { tv: { name: string; host: string; port: number; ipAddress: string } };
 };
 
 const Tab = createBottomTabNavigator();
@@ -50,7 +54,7 @@ function MainTabs() {
         },
         tabBarActiveTintColor: Colors.primary,
         tabBarInactiveTintColor: Colors.textSecondary,
-        tabBarIcon: ({color}) => { const icons:Record<string,string>={Dashboard:'⌂',TVs:'▣',Deploy:'⇧',Files:'▤',Remote:'◉',Menu:'☰',Settings:'⚙'}; return <Text style={{color,fontSize:18}}>{icons[route.name]||'•'}</Text>; },
+        tabBarIcon: ({color}) => { const icons:Record<string,string>={Dashboard:'⌂',TVs:'▣',Deploy:'⇧',Files:'▤',Remote:'◉',Signage:'📺',CMS:'🌐',Menu:'☰',Settings:'⚙'}; return <Text style={{color,fontSize:18}}>{icons[route.name]||'•'}</Text>; },
       })}
     >
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
@@ -58,7 +62,8 @@ function MainTabs() {
       <Tab.Screen name="Deploy" component={DeployScreen} />
       <Tab.Screen name="Files" component={FilesScreen} />
       <Tab.Screen name="Remote" component={RemoteScreen} />
-      <Tab.Screen name="Mirror" component={ScreenMirrorScreen} />
+      <Tab.Screen name="Signage" component={SignageDiscoveryScreen} />
+      <Tab.Screen name="CMS" component={CmsPanelScreen} />
       <Tab.Screen name="Menu" component={MenuScreen} />
       <Tab.Screen name="Settings" component={SettingsScreen} />
     </Tab.Navigator>
@@ -140,6 +145,8 @@ export default function App() {
           <Stack.Screen name="Logs" component={LogsScreen} />
           <Stack.Screen name="Presets" component={PresetsScreen} />
           <Stack.Screen name="About" component={AboutScreen} />
+          <Stack.Screen name="SignageDiscovery" component={SignageDiscoveryScreen} />
+          <Stack.Screen name="SignageControl" component={SignageControlScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>

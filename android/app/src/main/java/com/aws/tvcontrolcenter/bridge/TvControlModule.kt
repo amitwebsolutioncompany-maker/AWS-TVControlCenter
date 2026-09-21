@@ -10,6 +10,8 @@ import com.aws.tvcontrolcenter.adb.AdbDevice
 import com.flyfishxu.kadb.Kadb
 import com.aws.tvcontrolcenter.usb.UsbDeviceManager
 import com.aws.tvcontrolcenter.usb.UsbPermissionManager
+import com.aws.tvcontrolcenter.signage.SignageDiscoveryClient
+import com.aws.tvcontrolcenter.signage.SignageRemoteClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +34,8 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
     private val localAdbManager = AdbManager(reactContext)
     private val usbDeviceManager = UsbDeviceManager(reactContext)
     private val usbPermissionManager = UsbPermissionManager(reactContext)
+    private var signageDiscoveryClient: SignageDiscoveryClient? = null
+    private var signageRemoteClient: SignageRemoteClient? = null
     // Native connection failures must never terminate React Native's module
     // thread. Each operation reports its own error back to JavaScript instead.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -625,5 +629,169 @@ class TvControlModule(reactContext: ReactApplicationContext) : ReactContextBaseJ
                 putString("currentApp", info.currentApp ?: "")
             })
         }
+    }
+
+    // AWS-Signage TV Remote Control Methods
+    
+    @ReactMethod
+    fun startSignageDiscovery(promise: Promise) {
+        try {
+            signageDiscoveryClient = SignageDiscoveryClient(reactApplicationContext)
+            signageDiscoveryClient?.startDiscovery(object : SignageDiscoveryClient.DiscoveryCallback {
+                override fun onServiceDiscovered(service: SignageDiscoveryClient.DiscoveredService) {
+                    val map = Arguments.createMap()
+                    map.putString("name", service.name)
+                    map.putString("host", service.host)
+                    map.putInt("port", service.port)
+                    map.putString("ipAddress", service.ipAddress)
+                    sendEvent(reactApplicationContext, "signageServiceDiscovered", map)
+                }
+                
+                override fun onServiceLost(serviceName: String) {
+                    val map = Arguments.createMap()
+                    map.putString("name", serviceName)
+                    sendEvent(reactApplicationContext, "signageServiceLost", map)
+                }
+                
+                override fun onDiscoveryFailed(error: String) {
+                    val map = Arguments.createMap()
+                    map.putString("error", error)
+                    sendEvent(reactApplicationContext, "signageDiscoveryFailed", map)
+                }
+            })
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("DISCOVERY_ERROR", e.message, e)
+        }
+    }
+    
+    @ReactMethod
+    fun stopSignageDiscovery(promise: Promise) {
+        try {
+            signageDiscoveryClient?.stopDiscovery()
+            signageDiscoveryClient = null
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("DISCOVERY_ERROR", e.message, e)
+        }
+    }
+    
+    @ReactMethod
+    fun connectSignageTV(host: String, port: Int, promise: Promise) {
+        try {
+            signageRemoteClient = SignageRemoteClient(host, port)
+            signageRemoteClient?.connect(object : SignageRemoteClient.ConnectionCallback {
+                override fun onConnected() {
+                    val map = Arguments.createMap()
+                    map.putBoolean("connected", true)
+                    sendEvent(reactApplicationContext, "signageConnected", map)
+                }
+                
+                override fun onDisconnected() {
+                    val map = Arguments.createMap()
+                    map.putBoolean("connected", false)
+                    sendEvent(reactApplicationContext, "signageDisconnected", map)
+                }
+                
+                override fun onError(error: String) {
+                    val map = Arguments.createMap()
+                    map.putString("error", error)
+                    sendEvent(reactApplicationContext, "signageError", map)
+                }
+                
+                override fun onVideoFrame(data: ByteArray, offset: Int, length: Int) {
+                    val base64 = android.util.Base64.encodeToString(data, offset, length, android.util.Base64.NO_WRAP)
+                    val map = Arguments.createMap()
+                    map.putString("frame", base64)
+                    sendEvent(reactApplicationContext, "signageVideoFrame", map)
+                }
+                
+                override fun onAuthResult(success: Boolean) {
+                    val map = Arguments.createMap()
+                    map.putBoolean("success", success)
+                    sendEvent(reactApplicationContext, "signageAuthResult", map)
+                }
+            })
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("CONNECTION_ERROR", e.message, e)
+        }
+    }
+    
+    @ReactMethod
+    fun disconnectSignageTV(promise: Promise) {
+        try {
+            signageRemoteClient?.disconnect()
+            signageRemoteClient = null
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("DISCONNECTION_ERROR", e.message, e)
+        }
+    }
+    
+    @ReactMethod
+    fun authenticateSignageTV(pin: String, promise: Promise) {
+        try {
+            signageRemoteClient?.authenticate(pin)
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("AUTH_ERROR", e.message, e)
+        }
+    }
+    
+    @ReactMethod
+    fun sendSignageTap(x: Double, y: Double, promise: Promise) {
+        try {
+            signageRemoteClient?.sendTap(x.toFloat(), y.toFloat())
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("TOUCH_ERROR", e.message, e)
+        }
+    }
+    
+    @ReactMethod
+    fun sendSignageLongPress(x: Double, y: Double, promise: Promise) {
+        try {
+            signageRemoteClient?.sendLongPress(x.toFloat(), y.toFloat())
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("TOUCH_ERROR", e.message, e)
+        }
+    }
+    
+    @ReactMethod
+    fun sendSignageSwipe(startX: Double, startY: Double, endX: Double, endY: Double, duration: Double, promise: Promise) {
+        try {
+            signageRemoteClient?.sendSwipe(startX.toFloat(), startY.toFloat(), endX.toFloat(), endY.toFloat(), duration.toLong())
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("TOUCH_ERROR", e.message, e)
+        }
+    }
+    
+    @ReactMethod
+    fun sendSignageText(text: String, promise: Promise) {
+        try {
+            signageRemoteClient?.sendText(text)
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("TEXT_ERROR", e.message, e)
+        }
+    }
+    
+    @ReactMethod
+    fun sendSignageGlobalAction(action: Int, promise: Promise) {
+        try {
+            signageRemoteClient?.sendGlobalAction(action)
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("ACTION_ERROR", e.message, e)
+        }
+    }
+    
+    private fun sendEvent(reactContext: ReactContext, eventName: String, params: WritableMap?) {
+        reactContext
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(eventName, params)
     }
 }

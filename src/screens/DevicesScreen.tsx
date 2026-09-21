@@ -242,7 +242,7 @@ const DevicesScreen: React.FC = () => {
       </View>
 
       <View style={styles.devicesList}>
-        {devices.map((device) => (
+        {devices.filter(d => d.state === 'Connected').map((device) => (
           <View key={device.deviceId} style={styles.deviceCard}>
             <Text style={styles.deviceName}>{device.name}</Text>
             <Text style={styles.deviceInfo}>{device.ipAddress}:{device.port}</Text>
@@ -261,11 +261,6 @@ const DevicesScreen: React.FC = () => {
               <TouchableOpacity style={styles.selectButton} onPress={() => toggleDeviceSelection(device.deviceId)}>
                 <Text style={styles.controlButtonText}>{selectedDeviceIds.includes(device.deviceId) ? 'SELECTED' : 'SELECT'}</Text>
               </TouchableOpacity>
-              {device.state !== 'Connected' && (
-                <TouchableOpacity style={[styles.controlButton, { backgroundColor: Colors.success }]} onPress={() => connect(device.ipAddress, device.port)} disabled={connecting}>
-                  <Text style={styles.controlButtonText}>CONNECT</Text>
-                </TouchableOpacity>
-              )}
               <TouchableOpacity style={styles.controlButton} onPress={() => { setSelectedDevice(device.deviceId); navigation.navigate('DeviceDetails', { deviceId: device.deviceId }); }}>
                 <Text style={styles.controlButtonText}>CONTROL</Text>
               </TouchableOpacity>

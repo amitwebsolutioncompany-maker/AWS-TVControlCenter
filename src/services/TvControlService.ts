@@ -33,7 +33,6 @@ export interface TvControlService {
   screenOn: (deviceId: string) => Promise<void>;
   screenOff: (deviceId: string) => Promise<void>;
   getConnectedDevices: () => Promise<any[]>;
-  startMirrorActivity: (deviceId: string) => Promise<void>;
 }
 
 export interface CommandResult {

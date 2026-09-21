@@ -29,6 +29,8 @@ public class MainApplication extends Application implements ReactApplication {
           List<ReactPackage> packages = new PackageList(this).getPackages();
           // Add custom package for ADB features
           packages.add(new com.aws.tvcontrolcenter.bridge.TvControlPackage());
+          // Add custom package for video streaming
+          packages.add(new com.aws.tvcontrolcenter.video.VideoStreamPackage());
           return packages;
         }
 

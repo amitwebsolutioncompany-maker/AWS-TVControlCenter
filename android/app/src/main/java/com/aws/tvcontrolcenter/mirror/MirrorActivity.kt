@@ -91,11 +91,19 @@ class MirrorActivity : Activity() {
         })
 
         surfaceView.setOnTouchListener { _, event ->
-            if (event.actionMasked in 0..2) {
-                val width = surfaceView.width
-                val height = surfaceView.height
-                if (width > 0 && height > 0) {
-                    TvControlModule.adbManager?.mirrorTouch(deviceId, event.actionMasked, event.x, event.y, width, height)
+            val width = surfaceView.width
+            val height = surfaceView.height
+            if (width > 0 && height > 0) {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        TvControlModule.adbManager?.mirrorTouch(deviceId, 0, event.x, event.y, width, height)
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        TvControlModule.adbManager?.mirrorTouch(deviceId, 1, event.x, event.y, width, height)
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        TvControlModule.adbManager?.mirrorTouch(deviceId, 2, event.x, event.y, width, height)
+                    }
                 }
             }
             true // Important: return true to receive subsequent ACTION_MOVE and ACTION_UP events!

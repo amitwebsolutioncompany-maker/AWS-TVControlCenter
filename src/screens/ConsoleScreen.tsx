@@ -25,22 +25,6 @@ const ConsoleScreen: React.FC = () => {
     }
   };
 
-  const runDisableCommands = async () => {
-    const packages = ['tv.cloudwalker.profile', 'tv.cloudwalker.channels'];
-    try {
-      const devices = getSelectedConnectedDevices();
-      for (const device of devices) {
-        setOutput(current => [...current, `[${device.name} (${device.ipAddress}:${device.port})]`, 'Running disable commands...']);
-        for (const pkg of packages) {
-          setOutput(current => [...current, `$ pm disable-user --user 0 ${pkg}`]);
-          const result = await TvControlService.shell(device.deviceId, `pm disable-user --user 0 ${pkg}`);
-          setOutput(current => [...current, result.stdout || result.stderr || `Exit code: ${result.exitCode}`]);
-        }
-      }
-    } catch (error: any) {
-      setOutput(current => [...current, `Error: ${error?.message || 'Command failed'}`]);
-    }
-  };
   const useCommand = (value: string) => {
     setCommand(value);
   };
@@ -71,15 +55,6 @@ const ConsoleScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.disableCommandsContainer}>
-        <Text style={styles.disableCommandsTitle}>Disable Cloudwalker Apps:</Text>
-        <Text style={styles.disableCommandText}>pm disable-user --user 0 tv.cloudwalker.profile</Text>
-        <Text style={styles.disableCommandText}>pm disable-user --user 0 tv.cloudwalker.channels</Text>
-        <TouchableOpacity style={styles.runButton} onPress={runDisableCommands}>
-          <Text style={styles.runButtonText}>RUN ON SELECTED TVs</Text>
-        </TouchableOpacity>
-      </View>
-
       <ScrollView horizontal style={styles.presetsContainer}>
         <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('getprop')}>
           <Text style={styles.presetButtonText}>getprop</Text>
@@ -92,6 +67,75 @@ const ConsoleScreen: React.FC = () => {
         </TouchableOpacity>
         <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('wm size')}>
           <Text style={styles.presetButtonText}>wm size</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('pm disable-user --user 0 tv.cloudwalker.profile')}>
+          <Text style={styles.presetButtonText}>Disable Profile</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('pm disable-user --user 0 tv.cloudwalker.channels')}>
+          <Text style={styles.presetButtonText}>Disable Channels</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('pm disable-user --user 0 tv.cloudwalker.updater')}>
+          <Text style={styles.presetButtonText}>Disable Updater</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('pm disable-user --user 0 tv.cloudwalker.market')}>
+          <Text style={styles.presetButtonText}>Disable Market</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('pm disable-user --user 0 tv.cloudwalker.voice')}>
+          <Text style={styles.presetButtonText}>Disable Voice</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('pm disable-user --user 0 tv.cloudwalker.player')}>
+          <Text style={styles.presetButtonText}>Disable Player</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('pm disable-user --user 0 tv.cloudwalker.guide')}>
+          <Text style={styles.presetButtonText}>Disable Guide</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('pm disable-user --user 0 com.cvte.tv.systemupgrade')}>
+          <Text style={styles.presetButtonText}>Disable SysUpgrade</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('pm disable-user --user 0 tv.cloudwalker.inputserver')}>
+          <Text style={styles.presetButtonText}>Disable InputServer</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('pm disable-user --user 0 com.stark.store')}>
+          <Text style={styles.presetButtonText}>Disable StarkStore</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('pm disable-user --user 0 com.seraphic.openinet.cvte')}>
+          <Text style={styles.presetButtonText}>Disable Openinet</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('settings put global ota_disable_automatic_update 1')}>
+          <Text style={styles.presetButtonText}>Disable OTA</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('settings put global auto_update_apps 0')}>
+          <Text style={styles.presetButtonText}>Disable App Update</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('settings put global auto_update_system 0')}>
+          <Text style={styles.presetButtonText}>Disable Sys Update</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('settings put global heads_up_notifications_enabled 0')}>
+          <Text style={styles.presetButtonText}>Disable Notifs</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('settings put secure show_notification_snooze 0')}>
+          <Text style={styles.presetButtonText}>Disable Snooze</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('settings put global heads_up_off 1')}>
+          <Text style={styles.presetButtonText}>Heads Up Off</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('settings put system screen_off_timeout 2147483647')}>
+          <Text style={styles.presetButtonText}>Screen Always On</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('settings put secure screensaver_enabled 0')}>
+          <Text style={styles.presetButtonText}>Disable Screensaver</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('settings put global stay_on_while_plugged_in 3')}>
+          <Text style={styles.presetButtonText}>Stay On Plugged</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('settings put global low_power 0')}>
+          <Text style={styles.presetButtonText}>Disable Low Power</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('svc power stayon true')}>
+          <Text style={styles.presetButtonText}>Keep Awake</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.presetButton} onPress={() => useCommand('settings put secure sleep_timeout -1')}>
+          <Text style={styles.presetButtonText}>Never Sleep</Text>
         </TouchableOpacity>
       </ScrollView>
     </View>
@@ -165,36 +209,6 @@ const styles = StyleSheet.create({
   },
   presetButtonText: {
     fontSize: 12,
-    color: Colors.text,
-  },
-  disableCommandsContainer: {
-    padding: 16,
-    backgroundColor: Colors.surface,
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-  },
-  disableCommandsTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.text,
-    marginBottom: 8,
-  },
-  disableCommandText: {
-    fontSize: 11,
-    color: Colors.textSecondary,
-    fontFamily: 'monospace',
-    marginBottom: 4,
-  },
-  runButton: {
-    marginTop: 12,
-    backgroundColor: Colors.error,
-    padding: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  runButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
     color: Colors.text,
   },
 });

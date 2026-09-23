@@ -6,6 +6,7 @@ import { Colors } from '../constants/colors';
 import { TvControlService } from '../services/TvControlService';
 import { useDeviceStore } from '../store/deviceStore';
 import { getSelectedConnectedDevices } from '../utils/selectedDevice';
+import { getUserFriendlyError } from '../utils/errorMessages';
 
 const DevicesScreen: React.FC = () => {
   const { devices, addDevice, setSelectedDevice, selectedDeviceIds, toggleDeviceSelection, updateDevice, removeDevice, setDevices } = useDeviceStore();
@@ -39,13 +40,13 @@ const DevicesScreen: React.FC = () => {
       const device = await TvControlService.connectWifiDevice(host, adbPort);
       addDevice(device);
       setSelectedDevice(device.deviceId);
-      
+
       // Save Google TV IP for auto-connect (if port is not default 5555)
       if (adbPort !== 5555) {
         await AsyncStorage.setItem('google_tv_ip', host);
         await AsyncStorage.setItem('google_tv_port', adbPort.toString());
       }
-      
+
       // Fetch device info with retry for better reliability
       const fetchDeviceInfo = async (retries = 3) => {
         for (let i = 0; i < retries; i++) {
@@ -53,17 +54,17 @@ const DevicesScreen: React.FC = () => {
             await new Promise(resolve => setTimeout(resolve, 500)); // Wait for device to be ready
             const info = await TvControlService.getDeviceInfo(device.deviceId);
             if (info && info['ro.build.version.release']) {
-              updateDevice(device.deviceId, { 
-                deviceInfo: { 
-                  serial: info['ro.serialno'] || '', 
-                  manufacturer: info['ro.product.manufacturer'] || '', 
-                  model: info['ro.product.model'] || '', 
-                  androidVersion: info['ro.build.version.release'] || '', 
-                  sdkVersion: Number(info['ro.build.version.sdk']) || 0, 
-                  screenResolution: info.screen_size || '', 
-                  density: info.density || '', 
-                  storage: info.storage || '' 
-                } 
+              updateDevice(device.deviceId, {
+                deviceInfo: {
+                  serial: info['ro.serialno'] || '',
+                  manufacturer: info['ro.product.manufacturer'] || '',
+                  model: info['ro.product.model'] || '',
+                  androidVersion: info['ro.build.version.release'] || '',
+                  sdkVersion: Number(info['ro.build.version.sdk']) || 0,
+                  screenResolution: info.screen_size || '',
+                  density: info.density || '',
+                  storage: info.storage || ''
+                }
               });
               return true;
             }
@@ -72,27 +73,27 @@ const DevicesScreen: React.FC = () => {
           }
         }
         // If all retries fail, set a default device info to avoid "Android Unknown"
-        updateDevice(device.deviceId, { 
-          deviceInfo: { 
-            serial: '', 
-            manufacturer: 'Unknown', 
-            model: 'Google TV', 
-            androidVersion: 'Connected', 
-            sdkVersion: 0, 
-            screenResolution: '', 
-            density: '', 
-            storage: '' 
-          } 
+        updateDevice(device.deviceId, {
+          deviceInfo: {
+            serial: '',
+            manufacturer: 'Unknown',
+            model: 'Google TV',
+            androidVersion: 'Connected',
+            sdkVersion: 0,
+            screenResolution: '',
+            density: '',
+            storage: ''
+          }
         });
         return false;
       };
-      
+
       fetchDeviceInfo();
     } catch (error: any) {
       // Remove failed device from list - don't show error states
       const deviceId = `wifi_${host}_${adbPort}`;
       removeDevice(deviceId);
-      Alert.alert('Connection failed', error?.message || 'Enable ADB TCP/Wireless Debugging on the TV and check the TV screen for "Allow USB debugging" authorization prompt. Tap Allow to complete connection.');
+      Alert.alert('Connection failed', getUserFriendlyError(error?.message));
     } finally {
       setConnecting(false);
     }
@@ -243,24 +244,44 @@ const DevicesScreen: React.FC = () => {
 
       <View style={styles.devicesList}>
         {devices.filter(d => d.state === 'Connected').map((device) => (
-          <View key={device.deviceId} style={styles.deviceCard}>
-            <Text style={styles.deviceName}>{device.name}</Text>
-            <Text style={styles.deviceInfo}>{device.ipAddress}:{device.port}</Text>
-            <Text style={styles.deviceInfo}>Android {device.deviceInfo?.androidVersion || 'Unknown'}</Text>
-            <Text style={styles.deviceInfo}>{device.connectionType} ADB</Text>
+          <TouchableOpacity 
+            key={device.deviceId} 
+            style={[styles.deviceCard, selectedDeviceIds.includes(device.deviceId) && styles.deviceCardSelected]}
+            onPress={() => toggleDeviceSelection(device.deviceId)}
+          >
+            <View style={styles.deviceHeader}>
+              <View style={styles.deviceIcon}>
+                <Text style={styles.deviceIconText}>📺</Text>
+              </View>
+              <View style={styles.deviceInfoContainer}>
+                <Text style={styles.deviceName}>{device.name}</Text>
+                <Text style={styles.deviceInfo}>{device.deviceInfo?.manufacturer || 'Unknown'} {device.deviceInfo?.model || ''}</Text>
+              </View>
+              <View style={styles.statusContainer}>
+                <View style={[
+                  styles.statusDot,
+                  { backgroundColor: device.state === 'Connected' ? Colors.success : Colors.error }
+                ]} />
+                <Text style={styles.statusText}>{device.state === 'Connected' ? 'ONLINE' : 'OFFLINE'}</Text>
+              </View>
+            </View>
             
-            <View style={styles.statusContainer}>
-              <View style={[
-                styles.statusDot,
-                { backgroundColor: device.state === 'Connected' ? Colors.success : Colors.error }
-              ]} />
-              <Text style={styles.statusText}>{device.state.toUpperCase()}</Text>
+            <View style={styles.deviceDetails}>
+              <View style={styles.detailItem}>
+                <Text style={styles.detailLabel}>IP:</Text>
+                <Text style={styles.detailValue}>{device.ipAddress}:{device.port}</Text>
+              </View>
+              <View style={styles.detailItem}>
+                <Text style={styles.detailLabel}>Android:</Text>
+                <Text style={styles.detailValue}>{device.deviceInfo?.androidVersion || 'Unknown'}</Text>
+              </View>
+              <View style={styles.detailItem}>
+                <Text style={styles.detailLabel}>Type:</Text>
+                <Text style={styles.detailValue}>{device.connectionType}</Text>
+              </View>
             </View>
 
             <View style={styles.cardActions}>
-              <TouchableOpacity style={styles.selectButton} onPress={() => toggleDeviceSelection(device.deviceId)}>
-                <Text style={styles.controlButtonText}>{selectedDeviceIds.includes(device.deviceId) ? 'SELECTED' : 'SELECT'}</Text>
-              </TouchableOpacity>
               <TouchableOpacity style={styles.controlButton} onPress={() => { setSelectedDevice(device.deviceId); navigation.navigate('DeviceDetails', { deviceId: device.deviceId }); }}>
                 <Text style={styles.controlButtonText}>CONTROL</Text>
               </TouchableOpacity>
@@ -268,7 +289,7 @@ const DevicesScreen: React.FC = () => {
                 <Text style={styles.controlButtonText}>REMOVE</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </TouchableOpacity>
         ))}
       </View>
     </ScrollView>
@@ -338,6 +359,30 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 12,
   },
+  deviceCardSelected: {
+    borderWidth: 2,
+    borderColor: Colors.primary,
+  },
+  deviceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  deviceIcon: {
+    width: 48,
+    height: 48,
+    backgroundColor: Colors.surfaceLight,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  deviceIconText: {
+    fontSize: 24,
+  },
+  deviceInfoContainer: {
+    flex: 1,
+  },
   deviceName: {
     fontSize: 18,
     fontWeight: 'bold',
@@ -349,10 +394,29 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginBottom: 4,
   },
+  deviceDetails: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 12,
+  },
+  detailItem: {
+    flexDirection: 'row',
+    marginRight: 16,
+    marginBottom: 4,
+  },
+  detailLabel: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginRight: 4,
+  },
+  detailValue: {
+    fontSize: 12,
+    color: Colors.text,
+    fontWeight: '600',
+  },
   statusContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 12,
   },
   statusDot: {
     width: 8,

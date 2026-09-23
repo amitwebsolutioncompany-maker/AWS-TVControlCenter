@@ -3,45 +3,59 @@ import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'rea
 import { Colors } from '../constants/colors';
 import { TvControlService } from '../services/TvControlService';
 import { usePresetStore } from '../store/presetStore';
+import { useProgressStore } from '../store/progressStore';
+import { ProgressBar } from '../components/ProgressBar';
 import { getSelectedConnectedDevices } from '../utils/selectedDevice';
 
 const PresetsScreen: React.FC = () => {
   const { presets } = usePresetStore();
+  const { setProgress, clearProgress } = useProgressStore();
   const [runningId, setRunningId] = React.useState<string | null>(null);
 
   const run = async (preset: typeof presets[number]) => {
     try {
       const devices = getSelectedConnectedDevices();
       setRunningId(preset.id);
+      setProgress('Running Cleanup', 0, 'Starting cleanup...');
       let skipped = 0;
+      let totalSteps = devices.length * preset.steps.length;
+      let completedSteps = 0;
 
       for (const device of devices) {
         for (const step of preset.steps) {
           try {
             const p = String(step.params.packageName || '');
             if (step.type === 'DISABLE_PACKAGE') {
+              setProgress('Running Cleanup', (completedSteps / totalSteps) * 100, `Disabling ${p} on ${device.name}...`);
               await TvControlService.shell(device.deviceId, `pm disable-user --user 0 ${p}`);
             }
             if (step.type === 'ENABLE_PACKAGE') {
+              setProgress('Running Cleanup', (completedSteps / totalSteps) * 100, `Enabling ${p} on ${device.name}...`);
               await TvControlService.shell(device.deviceId, `pm enable --user 0 ${p}`);
             }
             if (step.type === 'SHELL_COMMAND') {
+              setProgress('Running Cleanup', (completedSteps / totalSteps) * 100, `Running command on ${device.name}...`);
               await TvControlService.shell(device.deviceId, String(step.params.command || ''));
             }
+            completedSteps++;
           } catch {
             skipped++;
+            completedSteps++;
           }
         }
       }
 
+      setProgress('Running Cleanup', 100, 'Cleanup complete');
       Alert.alert(
         skipped ? 'Cleanup complete with skipped items' : 'Cleanup complete',
         `${preset.name} applied to ${devices.length} selected TV(s).${skipped ? ` ${skipped} unsupported/failed item(s) skipped.` : ''}`
       );
     } catch (e: any) {
+      setProgress('Running Cleanup', 0, 'Cleanup failed');
       Alert.alert('Preset failed', e?.message || 'Select connected TVs first.');
     } finally {
       setRunningId(null);
+      setTimeout(clearProgress, 2000);
     }
   };
 
@@ -51,7 +65,7 @@ const PresetsScreen: React.FC = () => {
         <Text style={s.title}>Cleanup Presets</Text>
         <Text style={s.hint}>Select TVs on the TVs page. Each command is applied to every selected TV.</Text>
       </View>
-
+      <ProgressBar />
       {presets.map(preset => (
         <View key={preset.id} style={s.card}>
           <Text style={s.name}>{preset.name}</Text>

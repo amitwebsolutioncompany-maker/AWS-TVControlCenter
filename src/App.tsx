@@ -10,6 +10,7 @@ import { subscribeToDeviceConnected } from './services/TvControlService';
 import { useDeviceStore } from './store/deviceStore';
 
 import PasswordScreen from './screens/PasswordScreen';
+import WizardScreen from './screens/WizardScreen';
 import DashboardScreen from './screens/DashboardScreen';
 import DevicesScreen from './screens/DevicesScreen';
 import DeviceDetailsScreen from './screens/DeviceDetailsScreen';
@@ -27,6 +28,7 @@ import SignageDiscoveryScreen from './screens/SignageDiscoveryScreen';
 import SignageControlScreen from './screens/SignageControlScreen';
 import CmsPanelScreen from './screens/CmsPanelScreen';
 import { GlobalHeader } from './components/GlobalHeader';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type RootStackParamList = {
   MainTabs: undefined;
@@ -72,6 +74,17 @@ function MainTabs() {
 
 export default function App() {
   const [isUnlocked, setIsUnlocked] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
+
+  React.useEffect(() => {
+    const checkWizard = async () => {
+      const wizardCompleted = await AsyncStorage.getItem('wizard_completed');
+      if (!wizardCompleted) {
+        setShowWizard(true);
+      }
+    };
+    checkWizard();
+  }, []);
 
   React.useEffect(() => {
     if (!isUnlocked) return; // Don't start device discovery until unlocked
@@ -85,7 +98,7 @@ export default function App() {
         const scanned = await TvControlService.scanWifiDevices().catch(() => []);
         const store = useDeviceStore.getState();
         const existingDeviceIds = new Set(store.devices.map(d => d.deviceId));
-        
+
         await Promise.all(scanned.map(async (endpoint: { ipAddress: string; port: number }) => {
           const deviceId = `wifi_${endpoint.ipAddress}_${endpoint.port}`;
           // Skip if device is already in our list and connected
@@ -105,10 +118,36 @@ export default function App() {
         // The manual scan screen shows actionable errors; startup discovery is best-effort.
       }
     };
+
+    // Auto-reconnect for dropped connections
+    const autoReconnect = async () => {
+      const store = useDeviceStore.getState();
+      const disconnectedDevices = store.devices.filter(d => d.state === 'Disconnected' && d.connectionType === 'WIFI');
+      
+      for (const device of disconnectedDevices) {
+        try {
+          const reconnected = await TvControlService.connectWifiDevice(device.ipAddress, device.port);
+          store.addDevice(reconnected);
+        } catch {
+          // Device still unavailable, will retry next interval
+        }
+      }
+    };
+
     discoverAndConnect();
-    const interval = setInterval(discoverAndConnect, 60_000);
-    return () => { connected.remove(); clearInterval(interval); };
+    const discoveryInterval = setInterval(discoverAndConnect, 60_000);
+    const reconnectInterval = setInterval(autoReconnect, 30_000);
+    return () => { connected.remove(); clearInterval(discoveryInterval); clearInterval(reconnectInterval); };
   }, [isUnlocked]);
+
+  if (showWizard) {
+    return (
+      <SafeAreaProvider>
+        <StatusBar barStyle="light-content" backgroundColor={Colors.background} />
+        <WizardScreen onComplete={() => setShowWizard(false)} />
+      </SafeAreaProvider>
+    );
+  }
 
   if (!isUnlocked) {
     return (

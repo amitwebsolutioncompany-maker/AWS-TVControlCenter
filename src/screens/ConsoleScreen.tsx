@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity } from 'react-native';
 import { Colors } from '../constants/colors';
 import { TvControlService } from '../services/TvControlService';
-import { getSelectedConnectedDevice } from '../utils/selectedDevice';
+import { getSelectedConnectedDevices } from '../utils/selectedDevice';
 
 const ConsoleScreen: React.FC = () => {
   const [command, setCommand] = React.useState('');
@@ -14,9 +14,29 @@ const ConsoleScreen: React.FC = () => {
     setOutput(current => [...current, `$ ${input}`, 'Executing...']);
     setCommand('');
     try {
-      const device = getSelectedConnectedDevice();
-      const result = await TvControlService.shell(device.deviceId, input);
-      setOutput(current => [...current, result.stdout || result.stderr || `Exit code: ${result.exitCode}`]);
+      const devices = getSelectedConnectedDevices();
+      for (const device of devices) {
+        setOutput(current => [...current, `[${device.name} (${device.ipAddress}:${device.port})]`]);
+        const result = await TvControlService.shell(device.deviceId, input);
+        setOutput(current => [...current, result.stdout || result.stderr || `Exit code: ${result.exitCode}`]);
+      }
+    } catch (error: any) {
+      setOutput(current => [...current, `Error: ${error?.message || 'Command failed'}`]);
+    }
+  };
+
+  const runDisableCommands = async () => {
+    const packages = ['tv.cloudwalker.profile', 'tv.cloudwalker.channels'];
+    try {
+      const devices = getSelectedConnectedDevices();
+      for (const device of devices) {
+        setOutput(current => [...current, `[${device.name} (${device.ipAddress}:${device.port})]`, 'Running disable commands...']);
+        for (const pkg of packages) {
+          setOutput(current => [...current, `$ pm disable-user --user 0 ${pkg}`]);
+          const result = await TvControlService.shell(device.deviceId, `pm disable-user --user 0 ${pkg}`);
+          setOutput(current => [...current, result.stdout || result.stderr || `Exit code: ${result.exitCode}`]);
+        }
+      }
     } catch (error: any) {
       setOutput(current => [...current, `Error: ${error?.message || 'Command failed'}`]);
     }
@@ -48,6 +68,15 @@ const ConsoleScreen: React.FC = () => {
         />
         <TouchableOpacity style={styles.sendButton} onPress={executeCommand}>
           <Text style={styles.sendButtonText}>SEND</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.disableCommandsContainer}>
+        <Text style={styles.disableCommandsTitle}>Disable Cloudwalker Apps:</Text>
+        <Text style={styles.disableCommandText}>pm disable-user --user 0 tv.cloudwalker.profile</Text>
+        <Text style={styles.disableCommandText}>pm disable-user --user 0 tv.cloudwalker.channels</Text>
+        <TouchableOpacity style={styles.runButton} onPress={runDisableCommands}>
+          <Text style={styles.runButtonText}>RUN ON SELECTED TVs</Text>
         </TouchableOpacity>
       </View>
 
@@ -136,6 +165,36 @@ const styles = StyleSheet.create({
   },
   presetButtonText: {
     fontSize: 12,
+    color: Colors.text,
+  },
+  disableCommandsContainer: {
+    padding: 16,
+    backgroundColor: Colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  disableCommandsTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.text,
+    marginBottom: 8,
+  },
+  disableCommandText: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    fontFamily: 'monospace',
+    marginBottom: 4,
+  },
+  runButton: {
+    marginTop: 12,
+    backgroundColor: Colors.error,
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  runButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
     color: Colors.text,
   },
 });
